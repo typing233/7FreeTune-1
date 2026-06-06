@@ -1,10 +1,128 @@
 import { spawn } from 'child_process'
 import { net } from 'electron'
 
-export interface AudioSource {
-  name: string
-  extractUrl: (videoId: string) => Promise<string>
+let healthyInvidiousInstances: string[] = []
+let healthyPipedInstances: string[] = []
+let lastInstanceRefresh = 0
+const INSTANCE_REFRESH_INTERVAL = 30 * 60 * 1000
+
+async function refreshInstances(): Promise<void> {
+  const now = Date.now()
+  if (now - lastInstanceRefresh < INSTANCE_REFRESH_INTERVAL) return
+  lastInstanceRefresh = now
+
+  try {
+    const invData = await fetchJsonExternal('https://api.invidious.io/instances.json')
+    if (Array.isArray(invData)) {
+      const candidates = invData
+        .filter((d: any) => d[1]?.api && d[1]?.type === 'https' && !d[1]?.monitor?.down)
+        .map((d: any) => `https://${d[0]}`)
+      healthyInvidiousInstances = await filterHealthy(candidates, '/api/v1/stats')
+    }
+  } catch {
+    healthyInvidiousInstances = []
+  }
+
+  try {
+    const pipedData = await fetchJsonExternal('https://piped-instances.kavin.rocks/')
+    if (Array.isArray(pipedData)) {
+      const candidates = pipedData
+        .filter((d: any) => d.api_url)
+        .map((d: any) => d.api_url.replace(/\/$/, ''))
+      healthyPipedInstances = await filterHealthy(candidates, '/healthcheck')
+    }
+  } catch {
+    healthyPipedInstances = []
+  }
+
+  console.log(`[sources] Healthy: ${healthyInvidiousInstances.length} Invidious, ${healthyPipedInstances.length} Piped`)
 }
+
+async function filterHealthy(instances: string[], healthPath: string): Promise<string[]> {
+  const checks = instances.slice(0, 8).map(async (inst) => {
+    try {
+      const ok = await headCheck(`${inst}${healthPath}`, 5000)
+      return ok ? inst : null
+    } catch {
+      return null
+    }
+  })
+  const results = await Promise.all(checks)
+  return results.filter((r): r is string => r !== null)
+}
+
+function headCheck(url: string, timeoutMs: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => resolve(false), timeoutMs)
+    const request = net.request({ url, method: 'HEAD' })
+    request.on('response', (response) => {
+      clearTimeout(timeout)
+      resolve(response.statusCode >= 200 && response.statusCode < 400)
+    })
+    request.on('error', () => { clearTimeout(timeout); resolve(false) })
+    request.end()
+  })
+}
+
+function fetchJsonExternal(url: string): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('timeout')), 8000)
+    const request = net.request(url)
+    let body = ''
+    request.on('response', (response) => {
+      if (response.statusCode !== 200) {
+        clearTimeout(timeout)
+        reject(new Error(`HTTP ${response.statusCode}`))
+        return
+      }
+      response.on('data', (chunk) => { body += chunk.toString() })
+      response.on('end', () => {
+        clearTimeout(timeout)
+        try { resolve(JSON.parse(body)) } catch { reject(new Error('Invalid JSON')) }
+      })
+    })
+    request.on('error', (err) => { clearTimeout(timeout); reject(err) })
+    request.end()
+  })
+}
+
+function fetchJson(url: string, timeoutMs = 10000): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => { request.abort(); reject(new Error('timeout')) }, timeoutMs)
+    const request = net.request(url)
+    let body = ''
+    request.on('response', (response) => {
+      if (response.statusCode !== 200) {
+        clearTimeout(timeout)
+        reject(new Error(`HTTP ${response.statusCode}`))
+        return
+      }
+      response.on('data', (chunk) => { body += chunk.toString() })
+      response.on('end', () => {
+        clearTimeout(timeout)
+        try { resolve(JSON.parse(body)) } catch { reject(new Error('Invalid JSON')) }
+      })
+    })
+    request.on('error', (err) => { clearTimeout(timeout); reject(err) })
+    request.end()
+  })
+}
+
+function verifyUrl(url: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => resolve(false), 6000)
+    const request = net.request({ url, method: 'HEAD' })
+    request.on('response', (response) => {
+      clearTimeout(timeout)
+      const code = response.statusCode
+      resolve(code === 200 || code === 206)
+    })
+    request.on('error', () => { clearTimeout(timeout); resolve(false) })
+    request.end()
+  })
+}
+
+// --- Source 1: yt-dlp (primary, most reliable) ---
 
 function ytdlpExtract(videoId: string): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -43,101 +161,74 @@ function ytdlpExtract(videoId: string): Promise<string> {
   })
 }
 
-const INVIDIOUS_INSTANCES = [
-  'https://inv.nadeko.net',
-  'https://invidious.nerdvpn.de',
-  'https://invidious.jing.rocks'
-]
+// --- Source 2: Invidious (dynamic healthy instances) ---
 
-function invidiousExtract(videoId: string): Promise<string> {
-  return tryInstances(INVIDIOUS_INSTANCES, async (instance) => {
-    const url = `${instance}/api/v1/videos/${videoId}`
-    const data = await fetchJson(url)
-    if (!data.adaptiveFormats || data.adaptiveFormats.length === 0) {
-      throw new Error('No adaptive formats')
-    }
-    const audioFormats = data.adaptiveFormats.filter(
-      (f: any) => f.type?.startsWith('audio/')
-    )
-    if (audioFormats.length === 0) throw new Error('No audio formats found')
+async function invidiousExtract(videoId: string): Promise<string> {
+  await refreshInstances()
+  if (healthyInvidiousInstances.length === 0) {
+    throw new Error('No healthy Invidious instances')
+  }
 
-    const preferred = audioFormats.find((f: any) => f.container === 'm4a' || f.type?.includes('mp4a'))
-      || audioFormats[0]
-    if (!preferred.url) throw new Error('No URL in format')
-    return preferred.url
-  })
-}
-
-const PIPED_INSTANCES = [
-  'https://pipedapi.kavin.rocks',
-  'https://piped-api.lunar.icu',
-  'https://api.piped.yt'
-]
-
-function pipedExtract(videoId: string): Promise<string> {
-  return tryInstances(PIPED_INSTANCES, async (instance) => {
-    const url = `${instance}/streams/${videoId}`
-    const data = await fetchJson(url)
-    if (!data.audioStreams || data.audioStreams.length === 0) {
-      throw new Error('No audio streams')
-    }
-    const sorted = data.audioStreams.sort((a: any, b: any) => (b.bitrate || 0) - (a.bitrate || 0))
-    const preferred = sorted.find((s: any) => s.mimeType?.includes('mp4a') || s.format === 'M4A')
-      || sorted[0]
-    if (!preferred.url) throw new Error('No URL in stream')
-    return preferred.url
-  })
-}
-
-async function tryInstances(instances: string[], fn: (instance: string) => Promise<string>): Promise<string> {
   let lastError: Error | null = null
-  for (const instance of instances) {
+  for (const instance of healthyInvidiousInstances.slice(0, 3)) {
     try {
-      return await fn(instance)
+      const data = await fetchJson(`${instance}/api/v1/videos/${videoId}`, 10000)
+      const audioFormats = (data.adaptiveFormats || []).filter(
+        (f: any) => f.type?.startsWith('audio/')
+      )
+      if (audioFormats.length === 0) continue
+
+      const preferred = audioFormats.find((f: any) =>
+        f.type?.includes('mp4a') || f.container === 'm4a'
+      ) || audioFormats[0]
+
+      if (preferred.url) return preferred.url
     } catch (err: any) {
       lastError = err
     }
   }
-  throw lastError || new Error('All instances failed')
+  throw lastError || new Error('Invidious extraction failed')
 }
 
-function fetchJson(url: string): Promise<any> {
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error('Request timeout')), 10000)
+// --- Source 3: Piped (dynamic healthy instances) ---
 
-    const request = net.request(url)
-    let body = ''
+async function pipedExtract(videoId: string): Promise<string> {
+  await refreshInstances()
+  if (healthyPipedInstances.length === 0) {
+    throw new Error('No healthy Piped instances')
+  }
 
-    request.on('response', (response) => {
-      if (response.statusCode !== 200) {
-        clearTimeout(timeout)
-        reject(new Error(`HTTP ${response.statusCode}`))
-        return
-      }
-      response.on('data', (chunk) => { body += chunk.toString() })
-      response.on('end', () => {
-        clearTimeout(timeout)
-        try {
-          resolve(JSON.parse(body))
-        } catch {
-          reject(new Error('Invalid JSON'))
-        }
-      })
-    })
+  let lastError: Error | null = null
+  for (const instance of healthyPipedInstances.slice(0, 3)) {
+    try {
+      const data = await fetchJson(`${instance}/streams/${videoId}`, 10000)
+      const streams = data.audioStreams || []
+      if (streams.length === 0) continue
 
-    request.on('error', (err) => {
-      clearTimeout(timeout)
-      reject(err)
-    })
+      const sorted = streams.sort((a: any, b: any) => (b.bitrate || 0) - (a.bitrate || 0))
+      const preferred = sorted.find((s: any) =>
+        s.mimeType?.includes('mp4a') || s.format === 'M4A'
+      ) || sorted[0]
 
-    request.end()
-  })
+      if (preferred.url) return preferred.url
+    } catch (err: any) {
+      lastError = err
+    }
+  }
+  throw lastError || new Error('Piped extraction failed')
 }
 
-const sources: AudioSource[] = [
-  { name: 'yt-dlp', extractUrl: ytdlpExtract },
-  { name: 'invidious', extractUrl: invidiousExtract },
-  { name: 'piped', extractUrl: pipedExtract }
+// --- Fallback chain with URL verification ---
+
+interface ExtractSource {
+  name: string
+  extract: (videoId: string) => Promise<string>
+}
+
+const sources: ExtractSource[] = [
+  { name: 'yt-dlp', extract: ytdlpExtract },
+  { name: 'invidious', extract: invidiousExtract },
+  { name: 'piped', extract: pipedExtract }
 ]
 
 export async function extractAudioUrl(videoId: string): Promise<string> {
@@ -145,11 +236,19 @@ export async function extractAudioUrl(videoId: string): Promise<string> {
 
   for (const source of sources) {
     try {
-      const url = await source.extractUrl(videoId)
-      if (url) return url
+      const url = await source.extract(videoId)
+      if (!url) continue
+
+      const valid = await verifyUrl(url)
+      if (valid) {
+        console.log(`[audio] Extracted from ${source.name}: verified OK`)
+        return url
+      } else {
+        console.log(`[audio] ${source.name} URL failed verification, trying next...`)
+      }
     } catch (err: any) {
       lastError = err
-      console.error(`[${source.name}] extraction failed for ${videoId}: ${err.message}`)
+      console.log(`[audio] ${source.name} failed: ${err.message}`)
     }
   }
 

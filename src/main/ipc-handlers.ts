@@ -4,7 +4,7 @@ import { extractAudioUrlWithRetry } from './ytdlp/extract'
 import { getRecommendations } from './ytdlp/recommend'
 import { searchAlbum } from './ytdlp/album'
 import Store from 'electron-store'
-import { Track } from '../shared/types'
+import { Track, SearchResult } from '../shared/types'
 
 interface StoreSchema {
   history: Track[]
@@ -29,6 +29,24 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle('search-album', async (_event, albumQuery: string) => {
     return searchAlbum(albumQuery)
+  })
+
+  ipcMain.handle('resolve-track', async (_event, artist: string, title: string) => {
+    return autoMatch(artist, title)
+  })
+
+  ipcMain.handle('resolve-album-tracks', async (_event, tracks: Array<{ artist: string; title: string }>) => {
+    const results: Array<SearchResult | null> = []
+    for (const t of tracks) {
+      try {
+        const matched = await autoMatch(t.artist, t.title)
+        results.push(matched)
+      } catch {
+        results.push(null)
+      }
+      await new Promise((r) => setTimeout(r, 300))
+    }
+    return results
   })
 
   ipcMain.handle('auto-match', async (_event, artist: string, track: string) => {

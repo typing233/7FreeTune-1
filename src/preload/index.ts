@@ -15,6 +15,12 @@ const api = {
   searchAlbum: (albumQuery: string): Promise<AlbumSearchResult> =>
     ipcRenderer.invoke('search-album', albumQuery),
 
+  resolveTrack: (artist: string, title: string): Promise<SearchResult | null> =>
+    ipcRenderer.invoke('resolve-track', artist, title),
+
+  resolveAlbumTracks: (tracks: Array<{ artist: string; title: string }>): Promise<Array<SearchResult | null>> =>
+    ipcRenderer.invoke('resolve-album-tracks', tracks),
+
   autoMatch: (artist: string, track: string): Promise<SearchResult | null> =>
     ipcRenderer.invoke('auto-match', artist, track),
 
