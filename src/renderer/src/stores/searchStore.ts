@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { SearchResult } from '../types'
 
-type ViewMode = 'search' | 'history' | 'favorites'
+type ViewMode = 'search' | 'history' | 'favorites' | 'album'
 
 interface SearchState {
   query: string

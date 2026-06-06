@@ -1,9 +1,22 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import { Track, SearchResult } from '../shared/types'
+import { Track, SearchResult, AlbumResult } from '../shared/types'
+
+interface AlbumSearchResult {
+  albumTitle: string
+  artist: string
+  thumbnail: string
+  tracks: SearchResult[]
+}
 
 const api = {
   search: (query: string, limit?: number): Promise<SearchResult[]> =>
     ipcRenderer.invoke('search', query, limit),
+
+  searchAlbum: (albumQuery: string): Promise<AlbumSearchResult> =>
+    ipcRenderer.invoke('search-album', albumQuery),
+
+  autoMatch: (artist: string, track: string): Promise<SearchResult | null> =>
+    ipcRenderer.invoke('auto-match', artist, track),
 
   getAudioUrl: (videoId: string): Promise<string> =>
     ipcRenderer.invoke('get-audio-url', videoId),

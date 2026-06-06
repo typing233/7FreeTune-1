@@ -1,7 +1,8 @@
 import { ipcMain } from 'electron'
-import { searchYouTube } from './ytdlp/search'
+import { searchYouTube, autoMatch } from './ytdlp/search'
 import { extractAudioUrlWithRetry } from './ytdlp/extract'
 import { getRecommendations } from './ytdlp/recommend'
+import { searchAlbum } from './ytdlp/album'
 import Store from 'electron-store'
 import { Track } from '../shared/types'
 
@@ -24,6 +25,14 @@ const store = new Store<StoreSchema>({
 export function registerIpcHandlers(): void {
   ipcMain.handle('search', async (_event, query: string, limit?: number) => {
     return searchYouTube(query, limit || 10)
+  })
+
+  ipcMain.handle('search-album', async (_event, albumQuery: string) => {
+    return searchAlbum(albumQuery)
+  })
+
+  ipcMain.handle('auto-match', async (_event, artist: string, track: string) => {
+    return autoMatch(artist, track)
   })
 
   ipcMain.handle('get-audio-url', async (_event, videoId: string) => {

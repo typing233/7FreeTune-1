@@ -15,10 +15,6 @@ function AppInner() {
   const { items, currentIndex } = useQueueStore()
 
   useEffect(() => {
-    window.api.getVolume().then((vol) => {
-      usePlayerStore.getState().setVolume(vol)
-    })
-
     window.api.getSavedQueue().then((savedQueue) => {
       if (savedQueue.length > 0) {
         useQueueStore.getState().addTracks(savedQueue)
@@ -32,7 +28,6 @@ function AppInner() {
     }
   }, [error])
 
-  // Smart recommendations: when queue is about to run out
   useEffect(() => {
     const remaining = items.length - currentIndex - 1
     if (remaining <= 1 && items.length > 0 && currentIndex >= 0) {
@@ -42,23 +37,19 @@ function AppInner() {
           const existingIds = new Set(items.map((i) => i.videoId))
           const newRecs = recs.filter((r) => !existingIds.has(r.videoId)).slice(0, 5)
           if (newRecs.length > 0) {
-            useQueueStore.getState().addTracks(
-              newRecs.map((r) => ({ ...r, isRecommendation: true } as any))
-            )
+            useQueueStore.getState().addTracks(newRecs)
           }
         }).catch(() => {})
       }
     }
   }, [currentIndex, items.length])
 
-  // Save queue on changes
   useEffect(() => {
     if (items.length > 0) {
       window.api.saveQueue(items)
     }
   }, [items])
 
-  // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement) return
@@ -85,7 +76,6 @@ function AppInner() {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [togglePlay])
 
-  // Tray controls
   useEffect(() => {
     const unsubPlay = window.api.onTrayTogglePlay(togglePlay)
     const unsubNext = window.api.onTrayNext(() => useQueueStore.getState().next())

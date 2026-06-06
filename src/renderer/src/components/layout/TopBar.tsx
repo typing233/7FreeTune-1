@@ -1,4 +1,4 @@
-import { Search, Music, Heart, Clock } from 'lucide-react'
+import { Search, Music, Heart, Clock, Disc3 } from 'lucide-react'
 import { useSearchStore } from '../../stores/searchStore'
 import { useSearch } from '../../hooks/useSearch'
 
@@ -31,6 +31,15 @@ export function TopBar() {
       </div>
 
       <div className="flex items-center gap-1">
+        <button
+          onClick={() => setViewMode('album')}
+          className={`p-2 rounded-lg transition-colors ${
+            viewMode === 'album' ? 'bg-zinc-700 text-brand-400' : 'text-zinc-400 hover:text-zinc-200'
+          }`}
+          title="Album Search"
+        >
+          <Disc3 size={20} />
+        </button>
         <button
           onClick={() => setViewMode('history')}
           className={`p-2 rounded-lg transition-colors ${
